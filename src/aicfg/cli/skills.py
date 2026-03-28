@@ -88,22 +88,31 @@ def list_skills(category, target, installed, not_installed, fmt):
         click.echo("No skills found.")
         return
 
+    # Group by source
+    from collections import OrderedDict
+    grouped = OrderedDict()
+    for s in results:
+        source = s.get("source", "-")
+        if source not in grouped:
+            grouped[source] = []
+        grouped[source].append(s)
+
     table = Table(title="Skills", expand=True)
     table.add_column("Name", style="cyan", no_wrap=True, ratio=2)
     table.add_column("Description", no_wrap=True, overflow="ellipsis", ratio=4)
-    table.add_column("Source", style="dim", no_wrap=True, justify="center")
     table.add_column("Claude", justify="center", width=6)
     table.add_column("Gemini", justify="center", width=6)
 
-    for s in results:
-        claude_status = "[green]✓[/green]" if s["installed"]["claude"] else "[dim]-[/dim]"
-        gemini_status = "[green]✓[/green]" if s["installed"]["gemini"] else "[dim]-[/dim]"
-        if "claude" not in s["effective_targets"]:
-            claude_status = "[dim]n/a[/dim]"
-        if "gemini" not in s["effective_targets"]:
-            gemini_status = "[dim]n/a[/dim]"
-
-        table.add_row(s["name"], s["description"], s.get("source", "-"), claude_status, gemini_status)
+    for source, skills_in_source in grouped.items():
+        table.add_row(f"[bold]{source}[/bold]", "", "", "", end_section=True)
+        for s in skills_in_source:
+            claude_status = "[green]✓[/green]" if s["installed"]["claude"] else "[dim]-[/dim]"
+            gemini_status = "[green]✓[/green]" if s["installed"]["gemini"] else "[dim]-[/dim]"
+            if "claude" not in s["effective_targets"]:
+                claude_status = "[dim]n/a[/dim]"
+            if "gemini" not in s["effective_targets"]:
+                gemini_status = "[dim]n/a[/dim]"
+            table.add_row(s["name"], s["description"], claude_status, gemini_status)
 
     console.print(table)
 

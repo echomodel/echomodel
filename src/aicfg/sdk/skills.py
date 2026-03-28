@@ -242,34 +242,40 @@ def get_installed_status(name: str) -> dict[str, bool]:
 
 # --- Marketplace skill scanning ---
 
-def _scan_skills_dir(skills_dir: Path, source_name: str) -> list[dict]:
-    """Scan a directory for skills. Returns list of skill metadata dicts."""
+def _scan_skills_dir(skills_dir: Path, source_name: str, max_depth: int = 3) -> list[dict]:
+    """Scan a directory recursively for skills. Returns list of skill metadata dicts."""
     results = []
     if not skills_dir.is_dir():
         return results
 
-    for skill_dir in sorted(skills_dir.iterdir()):
-        skill_md = skill_dir / "SKILL.md"
-        if not skill_md.exists():
-            continue
+    def _scan(directory: Path, depth: int):
+        if depth > max_depth:
+            return
+        for entry in sorted(directory.iterdir()):
+            if not entry.is_dir() or entry.name.startswith("."):
+                continue
+            skill_md = entry / "SKILL.md"
+            if skill_md.exists():
+                meta, body = parse_skill_md(skill_md)
+                errors = validate_skill_meta(meta)
+                if errors:
+                    continue
+                name = meta["name"]
+                results.append({
+                    "name": name,
+                    "description": meta.get("description", ""),
+                    "category": meta.get("category", ""),
+                    "invocation": meta.get("invocation", "both"),
+                    "effective_targets": sorted(resolve_effective_targets(meta)),
+                    "installed": get_installed_status(name),
+                    "source": source_name,
+                    "source_path": str(entry),
+                })
+            else:
+                # No SKILL.md here — recurse into subdirectory (it's a collection)
+                _scan(entry, depth + 1)
 
-        meta, body = parse_skill_md(skill_md)
-        errors = validate_skill_meta(meta)
-        if errors:
-            continue
-
-        name = meta["name"]
-        results.append({
-            "name": name,
-            "description": meta.get("description", ""),
-            "category": meta.get("category", ""),
-            "invocation": meta.get("invocation", "both"),
-            "effective_targets": sorted(resolve_effective_targets(meta)),
-            "installed": get_installed_status(name),
-            "source": source_name,
-            "source_path": str(skill_dir),
-        })
-
+    _scan(skills_dir, 0)
     return results
 
 
