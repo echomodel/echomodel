@@ -98,7 +98,7 @@ def list_skills(category, target, installed, not_installed, fmt):
         grouped[source].append(s)
 
     table = Table(title="Skills", expand=True)
-    table.add_column("Name", style="cyan", no_wrap=True, ratio=2)
+    table.add_column("Name", style="cyan", no_wrap=True, ratio=3)
     table.add_column("Description", no_wrap=True, overflow="ellipsis", ratio=4)
     table.add_column("Claude", justify="center", width=6)
     table.add_column("Gemini", justify="center", width=6)
