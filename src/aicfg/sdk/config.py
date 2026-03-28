@@ -1,7 +1,6 @@
 import os
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 # --- Central Path Functions with Environment Variable Overrides ---
 
@@ -72,13 +71,6 @@ def get_gemini_skills_dir() -> Path:
     if path_str:
         return Path(path_str)
     return Path.home() / ".gemini" / "skills"
-
-def get_ai_common_config_dir() -> Path:
-    """Shared AI config directory (~/.config/ai-common)."""
-    path_str = os.environ.get("AICFG_CONFIG_DIR")
-    if path_str:
-        return Path(path_str)
-    return Path.home() / ".config" / "ai-common"
 
 def get_marketplace_cache_dir() -> Path:
     """Cache directory for marketplace clones (~/.cache/ai-common/skills/marketplaces)."""

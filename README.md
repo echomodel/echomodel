@@ -73,12 +73,47 @@ Tests run with network I/O blocked by default (except `tests/integration/`).
 
 | Group | Purpose |
 |-------|---------|
+| `aicfg skills` | Cross-platform skill management (marketplace, install, list) |
+| `aicfg claude` | Claude Code utilities (find-session) |
 | `aicfg cmds` | Manage Gemini slash commands (TOML files) |
 | `aicfg mcp` | Register/list/remove MCP servers |
 | `aicfg context` | Manage context files (CLAUDE.md, GEMINI.md) |
 | `aicfg paths` | Manage `context.includeDirectories` |
 | `aicfg settings` | Manage aliased Gemini settings |
 | `aicfg allowed-tools` | Manage `tools.allowed` list |
+
+### Skills
+
+Install and manage AI agent skills across Claude Code and Gemini CLI from git-hosted marketplaces.
+
+```bash
+# Register a skills marketplace
+aicfg skills marketplace register my/skills <git-url>
+
+# List all available skills (across all marketplaces + locally installed)
+aicfg skills list
+
+# Install a skill to all configured platforms
+aicfg skills install nm
+
+# Install to one platform only
+aicfg skills install nm --target claude
+
+# Uninstall
+aicfg skills uninstall nm
+
+# Show full details
+aicfg skills show nm
+```
+
+Skills use the [agentskills.io](https://agentskills.io/) open standard. Marketplace repos are also compatible with `gemini skills install` natively.
+
+### Claude Utilities
+
+```bash
+# Search recent Claude Code sessions for keywords
+aicfg claude find-session "deploy" --most-recent=20
+```
 
 ### Slash Commands
 
@@ -141,7 +176,8 @@ aicfg context revise user "Add a rule about commit messages"
 
 ## Architecture
 
-- **SDK-first**: All logic lives in `aicfg/sdk/`. CLI and MCP are thin wrappers.
+- **SDK-first**: All logic lives in `src/aicfg/sdk/`. CLI and MCP are thin wrappers.
+- **Skills**: Managed from git-hosted marketplace repos. Copied as-is (standard agentskills.io format, no transformation).
 - **Scope convention**: `user` = `~/.gemini/settings.json`, `project` = `./.gemini/settings.json`
 - **No secrets**: This repo contains no local state, auth tokens, or absolute paths.
 
