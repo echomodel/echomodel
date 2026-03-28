@@ -334,13 +334,15 @@ def get_skill(name: str) -> Optional[dict]:
     return None
 
 
-def _find_skill_source(name: str) -> tuple[Optional[Path], Optional[str], str]:
+def _find_skill_source(name: str, marketplace_filter: Optional[str] = None) -> tuple[Optional[Path], Optional[str], str]:
     """Find a skill's source directory across marketplaces.
     Returns (source_dir, marketplace_alias, url_or_empty).
     Raises ValueError on collision.
     """
     matches = []
     for mp in _list_registered_marketplaces():
+        if marketplace_filter and not mp["alias"].startswith(marketplace_filter):
+            continue
         for skill in _scan_skills_dir(mp["path"], mp["alias"]):
             if skill["name"] == name:
                 matches.append((Path(skill["source_path"]), mp["alias"], mp["url"]))
@@ -376,7 +378,7 @@ def install_skill(name: str, target: Optional[str] = None) -> dict:
         except ValueError as e:
             fetch_messages.append(str(e))
 
-    source_dir, source_alias, source_url = _find_skill_source(name)
+    source_dir, source_alias, source_url = _find_skill_source(name, marketplace_filter)
     if source_dir is None:
         raise FileNotFoundError(f"Skill not found: {name}")
 
@@ -423,28 +425,11 @@ def install_skill(name: str, target: Optional[str] = None) -> dict:
 
 def uninstall_skill(name: str, target: Optional[str] = None) -> list[str]:
     """Uninstall a skill from platforms. Returns list of removed paths."""
-    source_dir, _, _ = _find_skill_source(name)
-    if source_dir:
-        meta, _ = parse_skill_md(source_dir / "SKILL.md")
-        effective = resolve_effective_targets(meta)
-    else:
-        effective = SUPPORTED_PLATFORMS.copy()
-
-    if target:
-        if target not in effective:
-            raise ValueError(
-                f"'{name}' does not support {target} "
-                f"(effective targets: {', '.join(sorted(effective))})"
-            )
-        uninstall_targets = {target}
-    else:
-        uninstall_targets = effective
-
+    platforms = {target} if target else SUPPORTED_PLATFORMS
     removed = []
-    for t in sorted(uninstall_targets):
+    for t in sorted(platforms):
         dest_dir = _get_platform_install_dir(t) / name
         if dest_dir.exists():
             shutil.rmtree(dest_dir)
             removed.append(str(dest_dir))
-
     return removed
