@@ -104,7 +104,8 @@ def list_skills(category, target, installed, not_installed, fmt):
     table.add_column("Gemini", justify="center", width=6)
 
     for source, skills_in_source in grouped.items():
-        table.add_row(f"[bold]{source}[/bold]", "", "", "", end_section=True)
+        label = "[dim](unmanaged)[/dim]" if source == "-" else f"[bold]{source}[/bold]"
+        table.add_row(label, "", "", "", end_section=True)
         for s in skills_in_source:
             claude_status = "[green]✓[/green]" if s["installed"]["claude"] else "[dim]-[/dim]"
             gemini_status = "[green]✓[/green]" if s["installed"]["gemini"] else "[dim]-[/dim]"
