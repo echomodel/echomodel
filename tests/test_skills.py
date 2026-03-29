@@ -342,7 +342,7 @@ def test_install_skill_to_single_target(skills_env):
         skills_env["marketplace_cache"], "test/mp", "https://example.com/mp.git", ["my-skill"]
     )
 
-    result = skills.install_skill("my-skill", target="claude")
+    result = skills.install_skill("my-skill", platform="claude")
     assert result["success"] is True
     assert len(result["targets"]) == 1
     assert (skills_env["claude_skills"] / "my-skill" / "SKILL.md").exists()
@@ -354,7 +354,7 @@ def test_install_skill_copies_file_unchanged(skills_env):
         skills_env["marketplace_cache"], "test/mp", "https://example.com/mp.git", ["my-skill"]
     )
 
-    skills.install_skill("my-skill", target="claude")
+    skills.install_skill("my-skill", platform="claude")
 
     source = skills_env["marketplace_cache"] / "test~mp" / "my-skill" / "SKILL.md"
     installed = skills_env["claude_skills"] / "my-skill" / "SKILL.md"
@@ -394,7 +394,7 @@ def test_install_skill_with_marketplace_prefix(skills_env):
         skills_env["marketplace_cache"], "mp2", "https://example.com/2.git", ["skill-a"]
     )
 
-    result = skills.install_skill("mp1/skill-a", target="claude")
+    result = skills.install_skill("mp1/skill-a", platform="claude")
     assert result["success"] is True
     assert len(result["targets"]) == 1
     assert result["installed"]["source"] == "mp1"
@@ -562,7 +562,7 @@ def test_uninstall_skill_single_target(skills_env):
     _create_skill(skills_env["claude_skills"], "doomed")
     _create_skill(skills_env["gemini_skills"], "doomed")
 
-    removed = skills.uninstall_skill("doomed", target="claude")
+    removed = skills.uninstall_skill("doomed", platform="claude")
     assert len(removed) == 1
     assert not (skills_env["claude_skills"] / "doomed").exists()
     assert (skills_env["gemini_skills"] / "doomed" / "SKILL.md").exists()
@@ -651,3 +651,186 @@ def test_full_skill_lifecycle(skills_env):
     lc = [s for s in listed if s["name"] == "lifecycle-skill"][0]
     assert lc["installed"]["claude"] is False
     assert lc["installed"]["gemini"] is False
+
+
+# --- get_skill: enriched response ---
+
+def test_get_skill_includes_document_for_installed(skills_env):
+    _create_marketplace(
+        skills_env["marketplace_cache"], "test/mp", "https://example.com/mp.git", ["my-skill"]
+    )
+    skills.install_skill("my-skill")
+
+    result = skills.get_skill("my-skill")
+    assert "document" in result
+    assert "hash" in result["document"]
+    assert "length" in result["document"]
+
+
+def test_get_skill_includes_manifest_for_installed(skills_env):
+    _create_marketplace(
+        skills_env["marketplace_cache"], "test/mp", "https://example.com/mp.git", ["my-skill"]
+    )
+    skills.install_skill("my-skill")
+
+    result = skills.get_skill("my-skill")
+    assert "manifest" in result
+    assert result["manifest"]["source"] == "test/mp"
+    assert "installed_at" in result["manifest"]
+
+
+def test_get_skill_includes_marketplace_details(skills_env):
+    _create_marketplace(
+        skills_env["marketplace_cache"], "mp-a", "https://example.com/a.git", ["shared"]
+    )
+    _create_marketplace(
+        skills_env["marketplace_cache"], "mp-b", "https://example.com/b.git", ["shared"]
+    )
+    skills.install_skill("mp-a/shared")
+
+    result = skills.get_skill("shared")
+    assert "marketplaces" in result
+    aliases = [m["alias"] for m in result["marketplaces"]]
+    assert "mp-a" in aliases
+    assert "mp-b" in aliases
+    for mp in result["marketplaces"]:
+        assert "document" in mp
+        assert "hash" in mp["document"]
+
+
+def test_get_skill_marketplace_status_current(skills_env):
+    _create_marketplace(
+        skills_env["marketplace_cache"], "test/mp", "https://example.com/mp.git", ["my-skill"]
+    )
+    skills.install_skill("my-skill")
+
+    result = skills.get_skill("my-skill")
+    mp_detail = result["marketplaces"][0]
+    assert mp_detail["status"] == "current"
+
+
+def test_get_skill_marketplace_status_modified(skills_env):
+    _create_marketplace(
+        skills_env["marketplace_cache"], "test/mp", "https://example.com/mp.git", ["my-skill"]
+    )
+    skills.install_skill("my-skill")
+
+    installed_md = skills_env["claude_skills"] / "my-skill" / "SKILL.md"
+    installed_md.write_text(installed_md.read_text() + "\nLocal edit\n")
+
+    result = skills.get_skill("my-skill")
+    assert result["status"] == "modified"
+    assert result["marketplaces"][0]["status"] == "modified"
+
+
+def test_get_skill_no_marketplaces_for_uninstalled(skills_env):
+    _create_marketplace(
+        skills_env["marketplace_cache"], "test/mp", "https://example.com/mp.git", ["avail"]
+    )
+
+    result = skills.get_skill("avail")
+    assert "marketplaces" not in result
+    assert "document" not in result
+
+
+# --- publish_skill ---
+
+@pytest.fixture
+def git_marketplace(tmp_path):
+    """Create a bare git repo to act as a remote marketplace for publish tests."""
+    import os
+    import subprocess
+    bare_repo = tmp_path / "remote.git"
+    bare_repo.mkdir()
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(bare_repo)],
+                   capture_output=True, check=True)
+
+    work = tmp_path / "work"
+    work.mkdir()
+    # Use -c to disable hooks in test git operations
+    git_env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@test",
+        "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@test",
+    }
+    subprocess.run(["git", "clone", str(bare_repo), str(work)],
+                   capture_output=True, check=True, env=git_env)
+    # Disable hooks in the cloned repo
+    subprocess.run(["git", "-C", str(work), "config", "core.hooksPath", "/dev/null"],
+                   capture_output=True, check=True)
+    (work / ".marketplace").write_text("test/pub\n" + str(bare_repo) + "\n")
+    subprocess.run(["git", "-C", str(work), "add", "."],
+                   capture_output=True, check=True, env=git_env)
+    subprocess.run(["git", "-C", str(work), "commit", "-m", "init"],
+                   capture_output=True, check=True, env=git_env)
+    subprocess.run(["git", "-C", str(work), "push"],
+                   capture_output=True, check=True, env=git_env)
+
+    return {"bare": bare_repo, "url": str(bare_repo), "alias": "test/pub"}
+
+
+def test_publish_skill_from_installed(skills_env, git_marketplace):
+    """Publish an installed skill to a marketplace."""
+    _create_marketplace(
+        skills_env["marketplace_cache"], git_marketplace["alias"],
+        git_marketplace["url"], [],
+    )
+    _create_skill(skills_env["claude_skills"], "pub-skill", description="Publishable")
+
+    result = skills.publish_skill(
+        "pub-skill", marketplace=git_marketplace["alias"],
+    )
+    assert result["success"] is True
+    assert result["result"] == "published"
+    assert result["marketplace"] == git_marketplace["alias"]
+    assert result["ref"] is not None
+
+    manifest = _read_manifest(skills_env)
+    assert manifest["pub-skill"]["source"] == git_marketplace["alias"]
+
+
+def test_publish_skill_no_changes(skills_env, git_marketplace):
+    """Publishing identical content returns no_changes."""
+    _create_marketplace(
+        skills_env["marketplace_cache"], git_marketplace["alias"],
+        git_marketplace["url"], [],
+    )
+    _create_skill(skills_env["claude_skills"], "pub-skill", description="Publishable")
+
+    skills.publish_skill("pub-skill", marketplace=git_marketplace["alias"])
+    result = skills.publish_skill("pub-skill", marketplace=git_marketplace["alias"])
+    assert result["result"] == "no_changes"
+
+
+def test_publish_skill_from_source_path(skills_env, git_marketplace):
+    """Publish from an arbitrary directory using source_path."""
+    _create_marketplace(
+        skills_env["marketplace_cache"], git_marketplace["alias"],
+        git_marketplace["url"], [],
+    )
+    custom_dir = skills_env["tmp"] / "workspace" / "my-project"
+    _create_skill(custom_dir, "custom-skill", description="From workspace")
+
+    result = skills.publish_skill(
+        "custom-skill",
+        source_path=str(custom_dir / "custom-skill"),
+        marketplace=git_marketplace["alias"],
+    )
+    assert result["success"] is True
+    assert result["result"] == "published"
+
+
+def test_publish_skill_not_found(skills_env):
+    """Publishing a non-existent skill returns failed."""
+    result = skills.publish_skill("ghost")
+    assert result["success"] is False
+    assert result["result"] == "failed"
+
+
+def test_publish_skill_platform_and_source_path_conflict(skills_env):
+    """Cannot specify both platform and source_path."""
+    result = skills.publish_skill(
+        "x", platform="claude", source_path="/some/path",
+    )
+    assert result["success"] is False
+    assert "Cannot specify both" in result["message"]

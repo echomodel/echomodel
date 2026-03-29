@@ -29,7 +29,10 @@ aicfg skills list
 aicfg skills install develop-unit-tests
 
 # Install to one platform only
-aicfg skills install nm --target claude
+aicfg skills install nm --platform claude
+
+# Publish a local skill to a marketplace
+aicfg skills publish my-skill --marketplace my/skills
 ```
 
 ## Commands
@@ -37,17 +40,32 @@ aicfg skills install nm --target claude
 ### Skills
 
 ```bash
-aicfg skills list                          # all skills across marketplaces + local
-aicfg skills list --target claude          # filter by platform
-aicfg skills list --installed              # only installed skills
-aicfg skills install <name>               # install to all configured platforms
-aicfg skills install <name> --target claude
+aicfg skills list                              # all skills across marketplaces + local
+aicfg skills list --installed any              # only installed skills
+aicfg skills list --installed claude           # installed on claude
+aicfg skills list --installed none             # not installed anywhere
+aicfg skills list --refresh                    # force marketplace cache refresh
+aicfg skills install <name>                    # install to all configured platforms
+aicfg skills install <name> --platform claude  # install to one platform
 aicfg skills uninstall <name>
-aicfg skills show <name>                  # full skill details
+aicfg skills show <name>                       # full details + status per marketplace
+aicfg skills publish <name>                    # publish to source marketplace
+aicfg skills publish <name> --marketplace <alias>
+aicfg skills publish <name> --source-path ~/ws/my-skill  # from arbitrary dir
 aicfg skills marketplace register <alias> <git-url>
 aicfg skills marketplace list
 aicfg skills marketplace remove <alias>
 ```
+
+Marketplace repos work natively with both aicfg and the Gemini CLI:
+
+```bash
+# These are equivalent — same repo, same skill:
+aicfg skills install develop-skill               # via aicfg
+gemini skills install <url> --path coding/develop-skill  # via Gemini CLI
+```
+
+Claude Code has no native skill CLI. aicfg copies SKILL.md to `~/.claude/skills/<name>/SKILL.md` directly.
 
 ### Claude Utilities
 

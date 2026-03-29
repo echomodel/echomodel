@@ -148,6 +148,38 @@ the last install. This is reported as `previous.dirty: true`. When dirty,
 file), while provenance fields (`ref`, `source`, `installed_at`) come from
 the manifest since provenance cannot be derived from disk.
 
+### Marketplace Repo Structure Alignment
+
+Marketplace repos use the same directory structure that `gemini skills install`
+expects. This is intentional — a single marketplace repo must work with both
+aicfg and the native Gemini CLI without any transformation.
+
+Constraints:
+
+- Skills are directories containing SKILL.md, organized in collections
+  (subdirectories like `coding/`, `prompting/`).
+- The `path` field in the install manifest and publish_skill maps directly
+  to `gemini skills install <url> --path <path>`. Changing the structure
+  would break native Gemini CLI compatibility.
+- Gemini scans one level deep for skills at root, or within a collection
+  specified by `--path`. It does NOT recurse beyond that. aicfg scans
+  up to 3 levels deep for flexibility, but marketplace repos should keep
+  skills at standard depths for cross-tool compatibility.
+- Claude Code has no native skill CLI. aicfg copies SKILL.md directly to
+  `~/.claude/skills/<name>/SKILL.md`. The marketplace structure is
+  irrelevant to Claude — only the SKILL.md content matters.
+- aicfg copies SKILL.md as-is. No compilation, no field stripping, no
+  invented frontmatter. Claude-specific fields pass through; Gemini
+  ignores unknown fields. This is a hard constraint.
+
+### Publish and Cache Invalidation
+
+`publish_skill` invalidates the marketplace cache for the target marketplace
+after a successful push. This ensures subsequent `list_skills`/`get_skill`
+calls reflect the published changes without waiting for the 5-minute TTL.
+The cache is NOT refreshed (no re-clone) — it is only invalidated so the
+next access triggers a fetch.
+
 ## Testing
 
 ```bash

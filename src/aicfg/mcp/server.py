@@ -168,6 +168,7 @@ async def skills_marketplaces_list() -> dict[str, Any]:
 @mcp.tool()
 async def list_skills(
     installed: Optional[str] = None,
+    refresh: bool = False,
 ) -> dict[str, Any]:
     """List skills from all registered marketplaces and locally installed.
 
@@ -199,23 +200,32 @@ async def list_skills(
                    'none' = not installed anywhere.
                    'claude' = installed on claude.
                    'gemini' = installed on gemini.
+        refresh: Force refresh of marketplace cache (5-minute TTL)
+                 before reading. Avoid refreshing on every call.
     """
     try:
-        results = skills_sdk.list_skills(installed=installed)
+        results = skills_sdk.list_skills(installed=installed, refresh=refresh)
         return {"skills": results}
     except Exception as e:
         logger.error(f"Error listing skills: {e}")
         return {"error": str(e)}
 
 @mcp.tool()
-async def get_skill(name: str) -> dict[str, Any]:
+async def get_skill(name: str, refresh: bool = False) -> dict[str, Any]:
     """Get full details of a skill including metadata and instructions.
+
+    For installed skills, includes on-disk document info, manifest
+    provenance, and per-marketplace details with status comparison.
+
+    Marketplace data comes from local cache (5-minute TTL). Use
+    refresh=True to force a cache update. Avoid refreshing on every call.
 
     Args:
         name: The skill name (e.g. 'find-session')
+        refresh: Force refresh of marketplace cache before reading.
     """
     try:
-        result = skills_sdk.get_skill(name)
+        result = skills_sdk.get_skill(name, refresh=refresh)
         if result:
             return result
         return {"error": f"Skill '{name}' not found."}
@@ -224,7 +234,7 @@ async def get_skill(name: str) -> dict[str, Any]:
         return {"error": str(e)}
 
 @mcp.tool()
-async def install_skill(name: str, target: Optional[str] = None) -> dict[str, Any]:
+async def install_skill(name: str, platform: Optional[str] = None) -> dict[str, Any]:
     """Install a skill to configured platforms.
 
     Copies SKILL.md as-is from the marketplace source and records
@@ -253,24 +263,71 @@ async def install_skill(name: str, target: Optional[str] = None) -> dict[str, An
     Args:
         name: Skill name (e.g. 'find-session'), optionally prefixed
               with marketplace alias (e.g. 'krisrowe/skills/find-session').
-        target: Platform to install to ('claude' or 'gemini'). Default: all supported.
+        platform: Platform to install to ('claude' or 'gemini'). Default: all supported.
     """
-    return skills_sdk.install_skill(name, target=target)
+    return skills_sdk.install_skill(name, platform=platform)
 
 @mcp.tool()
-async def uninstall_skill(name: str, target: Optional[str] = None) -> dict[str, Any]:
+async def uninstall_skill(name: str, platform: Optional[str] = None) -> dict[str, Any]:
     """Uninstall a skill from platforms.
 
     Args:
         name: The skill name (e.g. 'find-session')
-        target: Optional platform to uninstall from ('claude' or 'gemini'). Default: all.
+        platform: Optional platform to uninstall from ('claude' or 'gemini'). Default: all.
     """
     try:
-        removed = skills_sdk.uninstall_skill(name, target=target)
+        removed = skills_sdk.uninstall_skill(name, platform=platform)
         return {"success": True, "removed": removed}
     except Exception as e:
         logger.error(f"Error uninstalling skill: {e}")
         return {"error": str(e)}
+
+@mcp.tool()
+async def publish_skill(
+    name: str,
+    platform: Optional[str] = None,
+    marketplace: Optional[str] = None,
+    path: Optional[str] = None,
+    source_path: Optional[str] = None,
+    message: Optional[str] = None,
+) -> dict[str, Any]:
+    """Publish a local skill to a marketplace git repo.
+
+    Clones the marketplace repo, copies the skill directory in, commits,
+    and pushes. Updates the local install manifest and invalidates the
+    marketplace cache.
+
+    The ``path`` parameter determines where the skill lands in the repo.
+    This aligns with ``gemini skills install <url> --path <path>`` so
+    the same repo works with both aicfg and native Gemini CLI. Claude
+    Code has no native skill CLI; aicfg copies SKILL.md to
+    ~/.claude/skills/<name>/SKILL.md directly.
+
+    Result codes:
+      - published: Committed and pushed successfully.
+      - no_changes: Skill matches what's already in the repo.
+      - failed: Publish did not succeed. Git errors passed through raw
+        in git_commit and git_push fields.
+
+    Args:
+        name: Skill name (must exist locally or at source_path).
+        platform: Which platform's installed copy to use ('claude' or
+                  'gemini'). Auto-detected if omitted. Cannot be used
+                  with source_path.
+        marketplace: Target marketplace alias. Defaults to manifest
+                     source. Required for skills with no manifest entry.
+        path: Destination path within the repo (e.g. 'coding/my-skill').
+              Maps to --path arg of 'gemini skills install'. Defaults
+              to manifest path or skill name.
+        source_path: Absolute path to a local skill directory. For skills
+                     not installed to any platform. Cannot be used with
+                     platform.
+        message: Git commit message. Default: 'Publish skill: <name>'.
+    """
+    return skills_sdk.publish_skill(
+        name, platform=platform, marketplace=marketplace,
+        path=path, source_path=source_path, message=message,
+    )
 
 @mcp.resource("aicfg://commands")
 async def commands_resource() -> str:

@@ -74,8 +74,10 @@ def marketplace_remove(alias):
               "'any' = installed on at least one platform, "
               "'none' = not installed, "
               "'claude'/'gemini' = installed on that platform.")
+@click.option("--refresh", is_flag=True, default=False,
+              help="Force refresh of marketplace cache (5-minute TTL) before listing.")
 @click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text", help="Output format")
-def list_skills(installed, fmt):
+def list_skills(installed, refresh, fmt):
     """List skills from all registered marketplaces and locally installed.
 
     Each skill shows its name, description, install status per platform,
@@ -85,7 +87,7 @@ def list_skills(installed, fmt):
     to get the git URL for a marketplace, then source_path to locate the
     skill folder for publishing updates.
     """
-    results = sdk.list_skills(installed=installed)
+    results = sdk.list_skills(installed=installed, refresh=refresh)
 
     if fmt == "json":
         console.print_json(json.dumps(results))
@@ -167,8 +169,8 @@ def show(name):
 
 @skills.command()
 @click.argument("name")
-@click.option("--target", "-t", type=click.Choice(["claude", "gemini"]), help="Install to specific platform only")
-def install(name, target):
+@click.option("--platform", "-p", type=click.Choice(["claude", "gemini"]), help="Install to specific platform only")
+def install(name, platform):
     """Install a skill to configured platforms.
 
     Copies SKILL.md as-is from the marketplace source and records
@@ -185,7 +187,7 @@ def install(name, target):
     When reinstalling a skill that was locally modified, the output
     warns that the previous copy was dirty (modified since install).
     """
-    result = sdk.install_skill(name, target=target)
+    result = sdk.install_skill(name, platform=platform)
     if not result["success"]:
         console.print(f"[red]Error:[/red] {result['message']}")
         sys.exit(1)
@@ -211,11 +213,11 @@ def install(name, target):
 
 @skills.command()
 @click.argument("name")
-@click.option("--target", "-t", type=click.Choice(["claude", "gemini"]), help="Uninstall from specific platform only")
-def uninstall(name, target):
+@click.option("--platform", "-p", type=click.Choice(["claude", "gemini"]), help="Uninstall from specific platform only")
+def uninstall(name, platform):
     """Uninstall a skill from platforms."""
     try:
-        removed = sdk.uninstall_skill(name, target=target)
+        removed = sdk.uninstall_skill(name, platform=platform)
         if not removed:
             click.echo(f"'{name}' was not installed on any platform.")
             return
@@ -224,3 +226,48 @@ def uninstall(name, target):
     except ValueError as e:
         console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
+
+
+@skills.command()
+@click.argument("name")
+@click.option("--platform", "-p", type=click.Choice(["claude", "gemini"]),
+              help="Which platform's installed copy to publish from.")
+@click.option("--marketplace", "-m", help="Target marketplace alias.")
+@click.option("--path", help="Destination path within the marketplace repo.")
+@click.option("--source-path", help="Absolute path to a local skill directory "
+              "(for skills not installed to any platform).")
+@click.option("--message", help="Git commit message.")
+def publish(name, platform, marketplace, path, source_path, message):
+    """Publish a local skill to a marketplace git repo.
+
+    Clones the marketplace repo, copies the skill in, commits, and pushes.
+    Updates the local install manifest and invalidates marketplace cache.
+
+    \b
+    Result codes:
+      published   - Committed and pushed successfully.
+      no_changes  - Skill matches what's already in the repo.
+      failed      - Publish did not succeed.
+
+    Git errors (clone, commit, push) are shown raw in the output.
+    """
+    result = sdk.publish_skill(
+        name, platform=platform, marketplace=marketplace,
+        path=path, source_path=source_path, message=message,
+    )
+    if not result["success"]:
+        console.print(f"[red]Error:[/red] {result['message']}")
+        if result.get("git_commit"):
+            console.print(f"[dim]{result['git_commit']}[/dim]")
+        if result.get("git_push"):
+            console.print(f"[dim]{result['git_push']}[/dim]")
+        sys.exit(1)
+
+    code = result["result"]
+    if code == "published":
+        console.print(f"  [green]Published[/green] {name} to {result['marketplace']}")
+        console.print(f"  [dim]Path: {result['path']}[/dim]")
+        console.print(f"  [dim]Ref: {result.get('ref', '-')}[/dim]")
+        console.print(f"  [dim]URL: {result['url']}[/dim]")
+    elif code == "no_changes":
+        console.print(f"  [dim]No changes[/dim] — {name} already matches {result['marketplace']}")

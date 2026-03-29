@@ -135,6 +135,26 @@ def marketplace_remove(alias: str) -> dict:
     return {"alias": alias, "removed": True}
 
 
+def _invalidate_marketplace_cache(alias: str):
+    """Invalidate cache for a specific marketplace so next access re-fetches."""
+    import os
+    cache_path = _marketplace_cache_path(alias)
+    meta_file = cache_path / MARKETPLACE_META_FILE
+    if meta_file.exists():
+        # Set mtime to epoch so TTL check triggers a re-fetch
+        os.utime(meta_file, (0, 0))
+
+
+def _refresh_all_marketplaces():
+    """Force refresh all registered marketplace caches."""
+    for mp in _list_registered_marketplaces():
+        try:
+            _invalidate_marketplace_cache(mp["alias"])
+            _fetch_marketplace(mp["alias"], mp["url"])
+        except ValueError:
+            pass
+
+
 def marketplace_list() -> list[dict]:
     """List registered skill marketplaces.
 
@@ -386,6 +406,7 @@ def _matches_installed_filter(status: dict[str, bool], installed: Optional[str])
 
 def list_skills(
     installed: Optional[str] = None,
+    refresh: bool = False,
 ) -> list[dict]:
     """List skills from all registered marketplaces and locally installed.
 
@@ -393,6 +414,10 @@ def list_skills(
     manifest (where the skill was actually installed from), not from
     marketplace scanning. Marketplace scanning is used only to discover
     skills that are available but not yet installed.
+
+    Marketplace data comes from local cache (5-minute TTL). Use
+    refresh=True to force a cache update before reading. Avoid
+    refreshing on every call — the cache is designed to be reused.
 
     Each result includes:
       - name: Skill name.
@@ -419,7 +444,10 @@ def list_skills(
                    'none' = not installed anywhere.
                    'claude' = installed on claude.
                    'gemini' = installed on gemini.
+        refresh: Force refresh of marketplace cache before reading.
     """
+    if refresh:
+        _refresh_all_marketplaces()
     manifest = _read_manifest()
     seen_names = set()
     results = []
@@ -498,51 +526,152 @@ def list_skills(
     return results
 
 
-def get_skill(name: str) -> Optional[dict]:
+def _get_disk_document(name: str) -> Optional[tuple[Path, dict]]:
+    """Find the on-disk SKILL.md for an installed skill and return (path, document_info)."""
+    for platform_dir in [get_claude_skills_dir(), get_gemini_skills_dir()]:
+        disk_md = platform_dir / name / "SKILL.md"
+        if disk_md.exists():
+            return disk_md, _document_info(disk_md)
+    return None
+
+
+def _build_marketplace_details(name: str, manifest_entry: Optional[dict]) -> list[dict]:
+    """Build per-marketplace detail entries for a skill."""
+    manifest_hash = (manifest_entry or {}).get("document", {}).get("hash")
+    disk_result = _get_disk_document(name)
+    disk_hash = disk_result[1]["hash"] if disk_result else None
+
+    details = []
+    for mp in _list_registered_marketplaces():
+        for skill in _scan_skills_dir(mp["path"], mp["alias"]):
+            if skill["name"] != name:
+                continue
+            mp_md = Path(skill["source_path"]) / "SKILL.md"
+            if not mp_md.exists():
+                continue
+            mp_doc = _document_info(mp_md)
+
+            # Compute status against this marketplace's version
+            if disk_hash is None:
+                mp_status = None
+            elif manifest_hash is None:
+                mp_status = "untracked"
+            else:
+                disk_modified = disk_hash != manifest_hash
+                source_changed = mp_doc["hash"] != manifest_hash
+                if disk_modified and source_changed:
+                    mp_status = "conflict"
+                elif disk_modified:
+                    mp_status = "modified"
+                elif source_changed:
+                    mp_status = "outdated"
+                else:
+                    mp_status = "current"
+
+            entry = {
+                "alias": mp["alias"],
+                "url": mp["url"],
+                "ref": mp.get("ref"),
+                "path": skill["source_path"],
+                "document": mp_doc,
+            }
+            if mp_status:
+                entry["status"] = mp_status
+            details.append(entry)
+    return details
+
+
+def get_skill(name: str, refresh: bool = False) -> Optional[dict]:
     """Get full details of a skill by name.
 
-    For installed skills, source provenance comes from the install
-    manifest. Marketplace scanning is used for skills not yet installed.
+    For installed skills, includes on-disk document info, manifest
+    provenance, and per-marketplace details with status.
+
+    Marketplace data comes from local cache (5-minute TTL). Use
+    refresh=True to force a cache update before reading. Avoid
+    refreshing on every call — the cache is designed to be reused.
+
+    Args:
+        name: The skill name.
+        refresh: Force refresh of marketplace cache before reading.
     """
+    if refresh:
+        _refresh_all_marketplaces()
+
     manifest = _read_manifest()
     manifest_entry = manifest.get(name)
+    install_status = get_installed_status(name)
+    is_installed = any(install_status.values())
+
+    # Find skill metadata — try marketplace first, then installed copies
+    meta = None
+    body = None
+    description = ""
 
     for skill in _get_all_marketplace_skills():
         if skill["name"] == name:
-            source_path = Path(skill["source_path"])
-            meta, body = parse_skill_md(source_path / "SKILL.md")
-            skill["meta"] = meta
-            skill["body"] = body
-            # Override source from manifest for installed skills
-            if any(skill["installed"].values()) and manifest_entry:
-                skill["source"] = manifest_entry.get("source", skill["source"])
-                if "path" in manifest_entry:
-                    skill["source_path"] = manifest_entry["path"]
-            return skill
+            mp_md = Path(skill["source_path"]) / "SKILL.md"
+            meta, body = parse_skill_md(mp_md)
+            description = meta.get("description", "")
+            break
 
-    for platform_dir in [get_claude_skills_dir(), get_gemini_skills_dir()]:
-        skill_md = platform_dir / name / "SKILL.md"
-        if skill_md.exists():
-            meta, body = parse_skill_md(skill_md)
-            source = "-"
-            source_path = None
-            if manifest_entry:
-                source = manifest_entry.get("source", "-")
-                source_path = manifest_entry.get("path")
-            result = {
-                "name": meta.get("name", name),
-                "description": meta.get("description", ""),
-                "effective_targets": sorted(SUPPORTED_PLATFORMS),
-                "installed": get_installed_status(name),
-                "source": source,
-                "meta": meta,
-                "body": body,
-            }
-            if source_path:
-                result["source_path"] = source_path
-            return result
+    if meta is None:
+        for platform_dir in [get_claude_skills_dir(), get_gemini_skills_dir()]:
+            skill_md = platform_dir / name / "SKILL.md"
+            if skill_md.exists():
+                meta, body = parse_skill_md(skill_md)
+                description = meta.get("description", "")
+                break
 
-    return None
+    if meta is None:
+        return None
+
+    # Source from manifest for installed skills
+    source = "-"
+    source_path = None
+    if manifest_entry:
+        source = manifest_entry.get("source", "-")
+        source_path = manifest_entry.get("path")
+
+    result = {
+        "name": meta.get("name", name),
+        "description": description,
+        "effective_targets": sorted(resolve_effective_targets(meta)),
+        "installed": install_status,
+        "source": source,
+        "meta": meta,
+        "body": body,
+    }
+    if source_path:
+        result["source_path"] = source_path
+
+    # Add on-disk document info for installed skills
+    if is_installed:
+        disk_result = _get_disk_document(name)
+        if disk_result:
+            result["document"] = disk_result[1]
+
+        # Add manifest provenance
+        if manifest_entry:
+            result["manifest"] = manifest_entry
+
+        # Compute top-level status against manifest source
+        mp_hash = None
+        marketplace_details = _build_marketplace_details(name, manifest_entry)
+        # Find the manifest source marketplace's hash
+        if manifest_entry:
+            for mp_detail in marketplace_details:
+                if mp_detail["alias"] == manifest_entry.get("source"):
+                    mp_hash = mp_detail["document"]["hash"]
+                    break
+        status = _check_status(name, manifest, marketplace_hash=mp_hash)
+        if status:
+            result["status"] = status
+
+        if marketplace_details:
+            result["marketplaces"] = marketplace_details
+
+    return result
 
 
 def _find_skill_source(name: str, marketplace_filter: Optional[str] = None) -> tuple[Optional[Path], Optional[str], str]:
@@ -620,7 +749,7 @@ def _build_previous(manifest_entry: dict, name: str) -> dict:
     return previous
 
 
-def install_skill(name: str, target: Optional[str] = None) -> dict:
+def install_skill(name: str, platform: Optional[str] = None) -> dict:
     """Install a skill to configured platforms.
 
     Copies the SKILL.md as-is from the marketplace source. Writes an
@@ -676,12 +805,12 @@ def install_skill(name: str, target: Optional[str] = None) -> dict:
 
         effective = resolve_effective_targets(meta)
 
-        if target:
-            if target not in effective:
+        if platform:
+            if platform not in effective:
                 return {"success": False, "result": "failed",
-                        "message": f"'{name}' does not support {target} "
+                        "message": f"'{name}' does not support {platform} "
                                    f"(effective targets: {', '.join(sorted(effective))})"}
-            install_targets = {target}
+            install_targets = {platform}
         else:
             install_targets = effective & detect_configured_platforms()
 
@@ -758,9 +887,9 @@ def install_skill(name: str, target: Optional[str] = None) -> dict:
         return {"success": False, "result": "failed", "message": str(e)}
 
 
-def uninstall_skill(name: str, target: Optional[str] = None) -> list[str]:
+def uninstall_skill(name: str, platform: Optional[str] = None) -> list[str]:
     """Uninstall a skill from platforms. Returns list of removed paths."""
-    platforms = {target} if target else SUPPORTED_PLATFORMS
+    platforms = {platform} if platform else SUPPORTED_PLATFORMS
     removed = []
     for t in sorted(platforms):
         dest_dir = _get_platform_install_dir(t) / name
@@ -768,3 +897,296 @@ def uninstall_skill(name: str, target: Optional[str] = None) -> list[str]:
             shutil.rmtree(dest_dir)
             removed.append(str(dest_dir))
     return removed
+
+
+def publish_skill(
+    name: str,
+    platform: Optional[str] = None,
+    marketplace: Optional[str] = None,
+    path: Optional[str] = None,
+    source_path: Optional[str] = None,
+    message: Optional[str] = None,
+) -> dict:
+    """Publish a local skill to a marketplace git repo.
+
+    Finds the local skill, clones the marketplace repo, copies the skill
+    directory in, commits, and pushes. Updates the local install manifest
+    to reflect the new source. Invalidates the marketplace cache so
+    subsequent list/get calls pick up the change.
+
+    Marketplace repo structure and path alignment:
+
+        Marketplace repos follow the agentskills.io convention where each
+        skill is a directory containing SKILL.md. Skills are organized in
+        collections (subdirectories):
+
+            krisrowe/skills/
+            ├── coding/
+            │   ├── develop-skill/SKILL.md
+            │   └── code-reuse/SKILL.md
+            └── prompting/
+                └── proceed/SKILL.md
+
+        The ``path`` parameter maps to the skill's location within this
+        structure. For example, path='coding/my-skill' places the skill
+        at coding/my-skill/SKILL.md in the repo.
+
+        This structure is directly compatible with platform-native install
+        commands:
+
+          gemini skills install <url> --path coding/my-skill
+              Installs one skill from the collection.
+          gemini skills install <url> --path coding
+              Installs all skills in the coding collection.
+          gemini skills install <url>
+              Installs all root-level skills (one level deep).
+
+        Claude Code has no native skill CLI — skills are installed by
+        copying SKILL.md to ~/.claude/skills/<name>/SKILL.md, which is
+        what aicfg skills install does.
+
+    Result codes:
+      - published: Skill was committed and pushed successfully.
+      - no_changes: Skill content matches what's already in the repo.
+      - failed: Publish did not succeed. Git errors are passed through
+        raw in the response.
+
+    Args:
+        name: Skill name (must exist locally or at source_path).
+        platform: Which platform's installed copy to use as source
+                  ('claude' or 'gemini'). Auto-detected if omitted.
+                  Cannot be used with source_path.
+        marketplace: Target marketplace alias. Defaults to the manifest
+                     source if the skill was previously installed.
+                     Required for skills with no manifest entry.
+        path: Destination path within the marketplace repo (e.g.
+              'coding/my-skill'). Maps to the --path arg of
+              'gemini skills install <url> --path <path>'. Defaults to
+              the manifest path if known, or the skill name if new.
+        source_path: Absolute path to a local skill directory to publish.
+                     Use this for skills not installed to any platform.
+                     Cannot be used with platform.
+        message: Git commit message. Default: 'Publish skill: <name>'.
+
+    Returns dict with:
+      - success (bool)
+      - result (str): 'published', 'no_changes', or 'failed'.
+      - skill (str): Skill name.
+      - marketplace (str): Marketplace alias.
+      - url (str): Marketplace git URL.
+      - path (str): Path within the repo.
+      - ref (str): Git commit SHA (short) after push.
+      - git_commit (str): Raw git commit output.
+      - git_push (str): Raw git push output.
+      - message (str): Human-readable summary.
+    """
+    import tempfile
+
+    try:
+        if platform and source_path:
+            return {"success": False, "result": "failed",
+                    "message": "Cannot specify both platform and source_path"}
+
+        # 1. Find the local skill directory
+        if source_path:
+            local_dir = Path(source_path)
+            if not (local_dir / "SKILL.md").exists():
+                return {"success": False, "result": "failed",
+                        "message": f"No SKILL.md found at {source_path}"}
+        else:
+            local_dir = _find_local_skill(name, platform)
+            if local_dir is None:
+                return {"success": False, "result": "failed",
+                        "message": f"Skill '{name}' not found locally"}
+
+        # Validate the skill
+        skill_md = local_dir / "SKILL.md"
+        meta, _ = parse_skill_md(skill_md)
+        errors = validate_skill_meta(meta)
+        if errors:
+            return {"success": False, "result": "failed",
+                    "message": f"Invalid skill: {'; '.join(errors)}"}
+
+        # 2. Determine target marketplace
+        manifest = _read_manifest()
+        manifest_entry = manifest.get(name)
+
+        mp_alias = marketplace
+        mp_url = None
+        dest_path = path
+
+        if not mp_alias and manifest_entry:
+            mp_alias = manifest_entry.get("source")
+            if mp_alias == "-":
+                mp_alias = None
+
+        if not mp_alias:
+            # Try to infer from registered marketplaces
+            registered = _list_registered_marketplaces()
+            if len(registered) == 1:
+                mp_alias = registered[0]["alias"]
+            elif len(registered) > 1:
+                return {"success": False, "result": "failed",
+                        "message": "Multiple marketplaces registered. "
+                                   "Specify --marketplace."}
+            else:
+                return {"success": False, "result": "failed",
+                        "message": "No marketplaces registered."}
+
+        # Get marketplace URL
+        for mp in _list_registered_marketplaces():
+            if mp["alias"] == mp_alias:
+                mp_url = mp["url"]
+                break
+        if not mp_url:
+            return {"success": False, "result": "failed",
+                    "message": f"Marketplace '{mp_alias}' not found"}
+
+        # Determine destination path within repo
+        if not dest_path and manifest_entry and manifest_entry.get("path"):
+            dest_path = manifest_entry["path"]
+        if not dest_path:
+            # Check if skill already exists in this marketplace's cache
+            for skill in _scan_skills_dir(_marketplace_cache_path(mp_alias), mp_alias):
+                if skill["name"] == name:
+                    dest_path = _relative_source_path(Path(skill["source_path"]))
+                    break
+        if not dest_path:
+            dest_path = name
+
+        # 3. Clone, copy, commit, push
+        tmp_dir = None
+        try:
+            tmp_dir = Path(tempfile.mkdtemp(prefix="aicfg-publish-"))
+            clone_path = tmp_dir / "repo"
+
+            # Clone
+            clone_result = subprocess.run(
+                ["git", "clone", "-q", "--depth=1", mp_url, str(clone_path)],
+                capture_output=True, text=True, timeout=30,
+            )
+            if clone_result.returncode != 0:
+                return {"success": False, "result": "failed",
+                        "message": f"git clone failed: {clone_result.stderr.strip()}"}
+
+            # Disable hooks in the cloned repo (publish is automated, not user commits)
+            subprocess.run(
+                ["git", "-C", str(clone_path), "config", "core.hooksPath", "/dev/null"],
+                capture_output=True, text=True,
+            )
+
+            # Copy skill directory
+            repo_dest = clone_path / dest_path
+            if repo_dest.exists():
+                shutil.rmtree(repo_dest)
+            shutil.copytree(local_dir, repo_dest)
+
+            # Git add
+            subprocess.run(
+                ["git", "-C", str(clone_path), "add", dest_path],
+                capture_output=True, text=True, check=True,
+            )
+
+            # Check for changes
+            diff_result = subprocess.run(
+                ["git", "-C", str(clone_path), "diff", "--cached", "--quiet"],
+                capture_output=True, text=True,
+            )
+            if diff_result.returncode == 0:
+                return {
+                    "success": True,
+                    "result": "no_changes",
+                    "skill": name,
+                    "marketplace": mp_alias,
+                    "url": mp_url,
+                    "path": dest_path,
+                    "message": f"{name}: no changes to publish",
+                }
+
+            # Commit
+            commit_msg = message or f"Publish skill: {name}"
+            commit_result = subprocess.run(
+                ["git", "-C", str(clone_path), "commit", "-m", commit_msg],
+                capture_output=True, text=True,
+            )
+            if commit_result.returncode != 0:
+                return {"success": False, "result": "failed",
+                        "message": f"git commit failed: {commit_result.stderr.strip()}",
+                        "git_commit": commit_result.stdout + commit_result.stderr}
+
+            # Get ref
+            ref_result = subprocess.run(
+                ["git", "-C", str(clone_path), "rev-parse", "--short", "HEAD"],
+                capture_output=True, text=True,
+            )
+            ref = ref_result.stdout.strip() if ref_result.returncode == 0 else None
+
+            # Push
+            push_result = subprocess.run(
+                ["git", "-C", str(clone_path), "push"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if push_result.returncode != 0:
+                return {"success": False, "result": "failed",
+                        "skill": name,
+                        "marketplace": mp_alias,
+                        "url": mp_url,
+                        "path": dest_path,
+                        "message": f"git push failed: {push_result.stderr.strip()}",
+                        "git_commit": commit_result.stdout,
+                        "git_push": push_result.stdout + push_result.stderr}
+
+            # 4. Update manifest
+            doc_info = _document_info(skill_md, meta)
+            manifest[name] = {
+                "ref": ref,
+                "source": mp_alias,
+                "url": mp_url,
+                "path": dest_path,
+                "document": doc_info,
+                "installed_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _write_manifest(manifest)
+
+            # 5. Invalidate marketplace cache
+            _invalidate_marketplace_cache(mp_alias)
+
+            return {
+                "success": True,
+                "result": "published",
+                "skill": name,
+                "marketplace": mp_alias,
+                "url": mp_url,
+                "path": dest_path,
+                "ref": ref,
+                "git_commit": commit_result.stdout,
+                "git_push": push_result.stdout,
+                "message": f"Published {name} to {mp_alias}",
+            }
+
+        finally:
+            if tmp_dir and tmp_dir.exists():
+                shutil.rmtree(tmp_dir)
+
+    except Exception as e:
+        return {"success": False, "result": "failed", "message": str(e)}
+
+
+def _find_local_skill(name: str, platform: Optional[str] = None) -> Optional[Path]:
+    """Find a locally installed skill directory.
+
+    Args:
+        name: Skill name.
+        platform: Specific platform to look in. If None, checks claude then gemini.
+    """
+    if platform:
+        skill_dir = _get_platform_install_dir(platform) / name
+        if (skill_dir / "SKILL.md").exists():
+            return skill_dir
+        return None
+
+    for platform_dir in [get_claude_skills_dir(), get_gemini_skills_dir()]:
+        skill_dir = platform_dir / name
+        if (skill_dir / "SKILL.md").exists():
+            return skill_dir
+    return None
