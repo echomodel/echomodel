@@ -237,7 +237,8 @@ def uninstall(name, platform):
 @click.option("--source-path", help="Absolute path to a local skill directory "
               "(for skills not installed to any platform).")
 @click.option("--message", help="Git commit message.")
-def publish(name, platform, marketplace, path, source_path, message):
+@click.option("--hide-git-ops", is_flag=True, help="Suppress git operations log.")
+def publish(name, platform, marketplace, path, source_path, message, hide_git_ops):
     """Publish a local skill to a marketplace git repo.
 
     Clones the marketplace repo, copies the skill in, commits, and pushes.
@@ -249,18 +250,37 @@ def publish(name, platform, marketplace, path, source_path, message):
       no_changes  - Skill matches what's already in the repo.
       failed      - Publish did not succeed.
 
-    Git errors (clone, commit, push) are shown raw in the output.
+    The response includes a git_ops log showing each git command executed,
+    in order, with exit codes and output. This provides transparency into
+    the publish process — use the structured fields (result, ref) for
+    control flow, not the git_ops contents.
     """
     result = sdk.publish_skill(
         name, platform=platform, marketplace=marketplace,
         path=path, source_path=source_path, message=message,
     )
+    def _print_git_ops():
+        if hide_git_ops:
+            return
+        git_ops = result.get("git_ops", [])
+        if not git_ops:
+            return
+        console.print()
+        console.print("  [dim]Git operations:[/dim]")
+        console.print("  [dim]─────────────────────────────[/dim]")
+        for op in git_ops:
+            output = op["result"].get("output", "").strip()
+            label = op["cmd"]["name"].ljust(8)
+            exit_code = op["result"]["exit_code"]
+            first_line = output.split("\n")[0] if output else "(no output)"
+            console.print(f"  [dim]{label}exit={exit_code}  {first_line}[/dim]")
+            if output and "\n" in output:
+                for line in output.split("\n")[1:]:
+                    console.print(f"  [dim]{''.ljust(8)}        {line}[/dim]")
+
     if not result["success"]:
         console.print(f"[red]Error:[/red] {result['message']}")
-        if result.get("git_commit"):
-            console.print(f"[dim]{result['git_commit']}[/dim]")
-        if result.get("git_push"):
-            console.print(f"[dim]{result['git_push']}[/dim]")
+        _print_git_ops()
         sys.exit(1)
 
     code = result["result"]
@@ -269,5 +289,6 @@ def publish(name, platform, marketplace, path, source_path, message):
         console.print(f"  [dim]Path: {result['path']}[/dim]")
         console.print(f"  [dim]Ref: {result.get('ref', '-')}[/dim]")
         console.print(f"  [dim]URL: {result['url']}[/dim]")
+        _print_git_ops()
     elif code == "no_changes":
         console.print(f"  [dim]No changes[/dim] — {name} already matches {result['marketplace']}")

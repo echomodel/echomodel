@@ -948,8 +948,22 @@ def publish_skill(
     Result codes:
       - published: Skill was committed and pushed successfully.
       - no_changes: Skill content matches what's already in the repo.
-      - failed: Publish did not succeed. Git errors are passed through
-        raw in the response.
+      - failed: Publish did not succeed.
+
+    Git operations transparency:
+
+        The response includes a ``git_ops`` list that records every git
+        command executed during publish, in order. Each entry captures
+        the command name, full argument list, exit code, and combined
+        stdout+stderr output. This provides verifiable evidence that
+        each step (clone, add, commit, push) completed as reported,
+        rather than requiring the caller to trust a summary alone.
+
+        ``git_ops`` is for human review and debugging only. Do not
+        couple application logic to its structure, contents, or order —
+        the sequence of git operations is an implementation detail that
+        may change. Use the structured fields (success, result, ref,
+        message) for control flow.
 
     Args:
         name: Skill name (must exist locally or at source_path).
@@ -976,8 +990,8 @@ def publish_skill(
       - url (str): Marketplace git URL.
       - path (str): Path within the repo.
       - ref (str): Git commit SHA (short) after push.
-      - git_commit (str): Raw git commit output.
-      - git_push (str): Raw git push output.
+      - git_ops (list[dict]): Ordered list of git operations executed.
+        Each entry: {cmd: {name, args}, result: {exit_code, output}}.
       - message (str): Human-readable summary.
     """
     import tempfile
@@ -1059,20 +1073,37 @@ def publish_skill(
         try:
             tmp_dir = Path(tempfile.mkdtemp(prefix="aicfg-publish-"))
             clone_path = tmp_dir / "repo"
+            git_ops = []
+
+            def _run_git(cmd_name, args, **kwargs):
+                """Run a git command, record it in git_ops, return result."""
+                kwargs.setdefault("timeout", 30)
+                r = subprocess.run(
+                    args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, **kwargs,
+                )
+                git_ops.append({
+                    "cmd": {"name": cmd_name, "args": args},
+                    "result": {"exit_code": r.returncode, "output": r.stdout},
+                })
+                return r
+
+            def _fail(msg):
+                return {"success": False, "result": "failed",
+                        "skill": name, "marketplace": mp_alias,
+                        "url": mp_url, "path": dest_path,
+                        "message": msg, "git_ops": git_ops}
 
             # Clone
-            clone_result = subprocess.run(
-                ["git", "clone", "-q", "--depth=1", mp_url, str(clone_path)],
-                capture_output=True, text=True, timeout=30,
-            )
-            if clone_result.returncode != 0:
-                return {"success": False, "result": "failed",
-                        "message": f"git clone failed: {clone_result.stderr.strip()}"}
+            r = _run_git("clone",
+                         ["git", "clone", "--depth=1", mp_url, str(clone_path)])
+            if r.returncode != 0:
+                return _fail(f"git clone failed: {r.stdout.strip()}")
 
             # Disable hooks in the cloned repo (publish is automated, not user commits)
             subprocess.run(
                 ["git", "-C", str(clone_path), "config", "core.hooksPath", "/dev/null"],
-                capture_output=True, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             )
 
             # Copy skill directory
@@ -1082,15 +1113,15 @@ def publish_skill(
             shutil.copytree(local_dir, repo_dest)
 
             # Git add
-            subprocess.run(
-                ["git", "-C", str(clone_path), "add", dest_path],
-                capture_output=True, text=True, check=True,
-            )
+            r = _run_git("add",
+                         ["git", "-C", str(clone_path), "add", dest_path])
+            if r.returncode != 0:
+                return _fail(f"git add failed: {r.stdout.strip()}")
 
             # Check for changes
             diff_result = subprocess.run(
                 ["git", "-C", str(clone_path), "diff", "--cached", "--quiet"],
-                capture_output=True, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             )
             if diff_result.returncode == 0:
                 return {
@@ -1100,41 +1131,29 @@ def publish_skill(
                     "marketplace": mp_alias,
                     "url": mp_url,
                     "path": dest_path,
+                    "git_ops": git_ops,
                     "message": f"{name}: no changes to publish",
                 }
 
             # Commit
             commit_msg = message or f"Publish skill: {name}"
-            commit_result = subprocess.run(
-                ["git", "-C", str(clone_path), "commit", "-m", commit_msg],
-                capture_output=True, text=True,
-            )
-            if commit_result.returncode != 0:
-                return {"success": False, "result": "failed",
-                        "message": f"git commit failed: {commit_result.stderr.strip()}",
-                        "git_commit": commit_result.stdout + commit_result.stderr}
+            r = _run_git("commit",
+                         ["git", "-C", str(clone_path), "commit", "-m", commit_msg])
+            if r.returncode != 0:
+                return _fail(f"git commit failed: {r.stdout.strip()}")
 
             # Get ref
             ref_result = subprocess.run(
                 ["git", "-C", str(clone_path), "rev-parse", "--short", "HEAD"],
-                capture_output=True, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             )
             ref = ref_result.stdout.strip() if ref_result.returncode == 0 else None
 
             # Push
-            push_result = subprocess.run(
-                ["git", "-C", str(clone_path), "push"],
-                capture_output=True, text=True, timeout=30,
-            )
-            if push_result.returncode != 0:
-                return {"success": False, "result": "failed",
-                        "skill": name,
-                        "marketplace": mp_alias,
-                        "url": mp_url,
-                        "path": dest_path,
-                        "message": f"git push failed: {push_result.stderr.strip()}",
-                        "git_commit": commit_result.stdout,
-                        "git_push": push_result.stdout + push_result.stderr}
+            r = _run_git("push",
+                         ["git", "-C", str(clone_path), "push"])
+            if r.returncode != 0:
+                return _fail(f"git push failed: {r.stdout.strip()}")
 
             # 4. Update manifest
             doc_info = _document_info(skill_md, meta)
@@ -1159,8 +1178,7 @@ def publish_skill(
                 "url": mp_url,
                 "path": dest_path,
                 "ref": ref,
-                "git_commit": commit_result.stdout,
-                "git_push": push_result.stdout,
+                "git_ops": git_ops,
                 "message": f"Published {name} to {mp_alias}",
             }
 

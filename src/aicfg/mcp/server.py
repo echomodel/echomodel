@@ -306,8 +306,14 @@ async def publish_skill(
     Result codes:
       - published: Committed and pushed successfully.
       - no_changes: Skill matches what's already in the repo.
-      - failed: Publish did not succeed. Git errors passed through raw
-        in git_commit and git_push fields.
+      - failed: Publish did not succeed.
+
+    The response includes a ``git_ops`` list recording each git command
+    executed in order, with exit codes and combined output. This provides
+    transparency into the publish process. ``git_ops`` is for review and
+    debugging — do not couple application logic to its structure or
+    contents. Use the structured fields (success, result, ref, message)
+    for control flow.
 
     Args:
         name: Skill name (must exist locally or at source_path).

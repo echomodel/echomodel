@@ -70,6 +70,34 @@ installed and registered separately. aicfg manages both but does not
 couple them. A skill that needs an MCP tool says so in its instructions;
 it does not declare a package dependency that aicfg resolves.
 
+### Structured Outputs with Operational Transparency
+
+Tool responses must communicate outcomes through conventional, structured
+fields at the right level of abstraction for the domain — `success`,
+`result`, `ref`, `message`, etc. Callers should never need to parse
+underlying script output to determine what happened or make decisions.
+
+At the same time, operations that perform multi-step side effects (such
+as `publish_skill` executing clone → add → commit → push) include a
+supplemental `git_ops` log: an ordered list of each command executed,
+with its arguments, exit code, and combined output. This gives callers
+verifiable evidence that each step completed as reported, rather than
+requiring them to trust a summary alone.
+
+These two concerns are deliberately separated:
+
+- **Structured fields** are the interface contract. Couple your code to
+  these. They are stable and designed for programmatic use.
+- **Operational logs** (`git_ops` and similar) are for human review and
+  debugging. Do not couple application logic to their structure, order,
+  or contents — the underlying commands are an implementation detail
+  that may change across versions.
+
+This pattern applies to any tool that orchestrates external operations.
+When adding new tools or extending existing ones, ensure the primary
+response schema is self-sufficient, and add operational transparency
+only as a supplemental, explicitly unstable field.
+
 ## Architecture
 
 ### SDK-First Design

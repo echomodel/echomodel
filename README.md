@@ -116,6 +116,7 @@ aicfg allowed-tools list                   # tools.allowed
 - **Skills** — standard agentskills.io format, copied as-is from git-hosted marketplaces. No transformation.
 - **Marketplace cache** — `~/.cache/ai-common/skills/marketplaces/`. Cloned without `.git`, 5-minute TTL.
 - **Scope convention** — `user` = `~/.gemini/settings.json`, `project` = `./.gemini/settings.json`
+- **Operational transparency** — operations like `publish` that perform multi-step git workflows include a full log of every command executed, with exit codes and output. You always get structured results for programmatic use, plus verifiable evidence of what actually happened under the hood.
 
 ## Development
 
