@@ -92,12 +92,61 @@ isolation:
 - `AICFG_CLAUDE_SKILLS_DIR` — overrides `~/.claude/skills`
 - `AICFG_GEMINI_SKILLS_DIR` — overrides `~/.gemini/skills`
 - `AICFG_MARKETPLACE_CACHE_DIR` — overrides `~/.cache/ai-common/skills/marketplaces`
+- `AICFG_INSTALL_MANIFEST_PATH` — overrides `~/.config/ai-common/skills/install-manifest.json`
 
 ### Marketplace Cache
 
 Marketplaces are git repos cloned to `~/.cache/ai-common/skills/marketplaces/`.
 Cache has a 5-minute TTL based on `.marketplace` file mtime. Cloned without
 `.git` — atomic swap from temp directory to cache path.
+
+### Install Manifest
+
+`install_skill` records provenance in `~/.config/ai-common/skills/install-manifest.json`,
+keyed by skill name:
+
+```json
+{
+  "my-skill": {
+    "ref": "bca5cbf",
+    "source": "krisrowe/skills",
+    "url": "https://github.com/krisrowe/skills.git",
+    "path": "coding/my-skill",
+    "document": { "version": "1.0", "hash": "a1b2c3d4", "length": 2840 },
+    "installed_at": "2026-03-28T14:30:00Z"
+  }
+}
+```
+
+The manifest is the authoritative source of provenance for installed skills.
+`list_skills()` and `get_skill()` use the manifest `source` field for installed
+skills rather than inferring source from marketplace name matching.
+
+### Install Result Codes
+
+`install_skill` returns a `result` field with one of:
+
+- **`newly_installed`** — No prior manifest entry. `previous` omitted from response.
+- **`content_updated`** — Source SKILL.md hash differs from manifest hash.
+  Hash-based, not version-based — a skill can be `content_updated` even if
+  the version number is unchanged or absent.
+- **`document_unchanged`** — Source SKILL.md hash matches manifest hash.
+  The skill directory is still copied to targets regardless.
+- **`failed`** — Installation did not succeed. Returns `{success: false, result: "failed", message}`.
+
+**Naming asymmetry is intentional:** `content_updated` is broad (any change
+detected via hash) while `document_unchanged` is specific (SKILL.md hash
+matches). An update can be triggered by content changes, but the "unchanged"
+determination is based on the primary document hash.
+
+### Dirty Detection
+
+On reinstall, the live on-disk SKILL.md is hashed and compared against the
+manifest hash. If they differ, the installed copy was locally modified since
+the last install. This is reported as `previous.dirty: true`. When dirty,
+`previous.document` reflects the disk state (hash/length from the modified
+file), while provenance fields (`ref`, `source`, `installed_at`) come from
+the manifest since provenance cannot be derived from disk.
 
 ## Testing
 

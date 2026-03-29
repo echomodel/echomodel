@@ -69,29 +69,23 @@ def marketplace_remove(alias):
 
 
 @skills.command(name="list")
-@click.option("--target", "-t", type=click.Choice(["claude", "gemini"]), help="Filter by platform")
-@click.option("--installed", is_flag=True, default=None, help="Show only installed skills")
-@click.option("--not-installed", is_flag=True, default=None, help="Show only not-installed skills")
+@click.option("--installed", "-i", type=click.Choice(["any", "none", "claude", "gemini"]),
+              default=None, is_eager=True, help="Filter by install status: "
+              "'any' = installed on at least one platform, "
+              "'none' = not installed, "
+              "'claude'/'gemini' = installed on that platform.")
 @click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text", help="Output format")
-def list_skills(target, installed, not_installed, fmt):
+def list_skills(installed, fmt):
     """List skills from all registered marketplaces and locally installed.
 
     Each skill shows its name, description, install status per platform,
-    source marketplace, and source_path within the marketplace repo. Use
-    'aicfg skills marketplace list' to get the git URL for a marketplace,
-    then source_path to locate the skill folder for publishing updates.
+    source marketplace, and source_path within the marketplace repo. For
+    installed skills, source comes from the install manifest (where the
+    skill was actually installed from). Use 'aicfg skills marketplace list'
+    to get the git URL for a marketplace, then source_path to locate the
+    skill folder for publishing updates.
     """
-    if installed and not_installed:
-        click.echo("Cannot specify both --installed and --not-installed", err=True)
-        sys.exit(1)
-
-    installed_filter = None
-    if installed:
-        installed_filter = True
-    elif not_installed:
-        installed_filter = False
-
-    results = sdk.list_skills(target=target, installed=installed_filter)
+    results = sdk.list_skills(installed=installed)
 
     if fmt == "json":
         console.print_json(json.dumps(results))
@@ -165,19 +159,44 @@ def show(name):
 @click.argument("name")
 @click.option("--target", "-t", type=click.Choice(["claude", "gemini"]), help="Install to specific platform only")
 def install(name, target):
-    """Install a skill to configured platforms."""
-    try:
-        result = sdk.install_skill(name, target=target)
-        for path in result["installed"]:
-            console.print(f"  [green]✓[/green] {path}")
-        if result.get("from_cache"):
-            console.print(f"  [yellow]Warning:[/yellow] Installed from cache")
-        if result.get("message"):
-            console.print(f"  [dim]{result['message']}[/dim]")
-        console.print(f"  [dim]Source: {result['source']} ({result['url']})[/dim]")
-    except (FileNotFoundError, ValueError) as e:
-        console.print(f"[red]Error:[/red] {e}")
+    """Install a skill to configured platforms.
+
+    Copies SKILL.md as-is from the marketplace source and records
+    provenance in the install manifest. Reports install outcome:
+
+    \b
+    Result codes:
+      newly_installed    - First install on this machine.
+      content_updated    - Source SKILL.md changed since last install
+                           (hash-based, not version-based).
+      document_unchanged - Source SKILL.md matches last install.
+      failed             - Installation did not succeed.
+
+    When reinstalling a skill that was locally modified, the output
+    warns that the previous copy was dirty (modified since install).
+    """
+    result = sdk.install_skill(name, target=target)
+    if not result["success"]:
+        console.print(f"[red]Error:[/red] {result['message']}")
         sys.exit(1)
+
+    for path in result["targets"]:
+        console.print(f"  [green]✓[/green] {path}")
+
+    code = result["result"]
+    if code == "newly_installed":
+        console.print(f"  [green]Newly installed[/green]")
+    elif code == "content_updated":
+        console.print(f"  [yellow]Content updated[/yellow]")
+    else:
+        console.print(f"  [dim]Document unchanged[/dim]")
+
+    previous = result.get("previous")
+    if previous and previous.get("dirty"):
+        console.print(f"  [yellow]Warning:[/yellow] Previous install was locally modified")
+
+    installed = result["installed"]
+    console.print(f"  [dim]Source: {installed['source']} ({installed['url']})[/dim]")
 
 
 @skills.command()

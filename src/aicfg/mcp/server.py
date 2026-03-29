@@ -167,26 +167,35 @@ async def skills_marketplaces_list() -> dict[str, Any]:
 
 @mcp.tool()
 async def list_skills(
-    target: Optional[str] = None,
+    installed: Optional[str] = None,
 ) -> dict[str, Any]:
     """List skills from all registered marketplaces and locally installed.
+
+    For installed skills, the source field comes from the install manifest
+    (where the skill was actually installed from), not from marketplace
+    name matching.
 
     Each skill result includes:
       - name: Skill name.
       - description: Short description from SKILL.md frontmatter.
       - effective_targets: Platforms this skill supports (['claude', 'gemini']).
       - installed: {platform: bool} showing install status per platform.
-      - source: Marketplace alias the skill was found in, or '-' if only
-                found locally (not from any marketplace).
+      - source: For installed skills, the marketplace alias from the
+                install manifest. For available skills, the marketplace
+                where the skill was found. '-' if unknown.
       - source_path: Path to the skill directory within the marketplace
                      repo. Use with skills_marketplaces_list() url to
                      locate the skill in its source repo for updates.
 
     Args:
-        target: Filter by platform ('claude' or 'gemini').
+        installed: Filter by install status. None (default) shows all.
+                   'any' = installed on at least one platform.
+                   'none' = not installed anywhere.
+                   'claude' = installed on claude.
+                   'gemini' = installed on gemini.
     """
     try:
-        results = skills_sdk.list_skills(target=target)
+        results = skills_sdk.list_skills(installed=installed)
         return {"skills": results}
     except Exception as e:
         logger.error(f"Error listing skills: {e}")
@@ -212,16 +221,35 @@ async def get_skill(name: str) -> dict[str, Any]:
 async def install_skill(name: str, target: Optional[str] = None) -> dict[str, Any]:
     """Install a skill to configured platforms.
 
+    Copies SKILL.md as-is from the marketplace source and records
+    provenance in the install manifest.
+
+    Result codes:
+      - newly_installed: First install, no prior manifest entry.
+      - content_updated: Source SKILL.md hash differs from manifest hash
+        (hash-based, not version-based).
+      - document_unchanged: Source SKILL.md hash matches manifest hash.
+        Skill directory is still copied to targets regardless.
+      - failed: Installation did not succeed.
+
+    Response includes:
+      - success (bool)
+      - result (str): One of the result codes above.
+      - installed (dict): Provenance — ref, source, url, path,
+        document {version, hash, length}.
+      - previous (dict, omitted for newly_installed/failed): Prior
+        provenance — ref, source, url, path, installed_at, dirty (bool),
+        document {version, hash, length}. When dirty is true, document
+        reflects live disk state; provenance fields come from manifest.
+      - targets (list[str]): Platform directories where skill was copied.
+      - message (str): Human-readable summary.
+
     Args:
-        name: The skill name (e.g. 'find-session')
-        target: Optional platform to install to ('claude' or 'gemini'). Default: all supported.
+        name: Skill name (e.g. 'find-session'), optionally prefixed
+              with marketplace alias (e.g. 'krisrowe/skills/find-session').
+        target: Platform to install to ('claude' or 'gemini'). Default: all supported.
     """
-    try:
-        installed = skills_sdk.install_skill(name, target=target)
-        return {"success": True, "installed": installed}
-    except Exception as e:
-        logger.error(f"Error installing skill: {e}")
-        return {"error": str(e)}
+    return skills_sdk.install_skill(name, target=target)
 
 @mcp.tool()
 async def uninstall_skill(name: str, target: Optional[str] = None) -> dict[str, Any]:

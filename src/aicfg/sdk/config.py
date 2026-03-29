@@ -72,6 +72,13 @@ def get_gemini_skills_dir() -> Path:
         return Path(path_str)
     return Path.home() / ".gemini" / "skills"
 
+def get_install_manifest_path() -> Path:
+    """Install manifest for skill provenance (~/.config/ai-common/skills/install-manifest.json)."""
+    path_str = os.environ.get("AICFG_INSTALL_MANIFEST_PATH")
+    if path_str:
+        return Path(path_str)
+    return Path.home() / ".config" / "ai-common" / "skills" / "install-manifest.json"
+
 def get_marketplace_cache_dir() -> Path:
     """Cache directory for marketplace clones (~/.cache/ai-common/skills/marketplaces)."""
     path_str = os.environ.get("AICFG_MARKETPLACE_CACHE_DIR")
