@@ -121,7 +121,23 @@ def marketplace_remove(alias: str) -> dict:
 
 
 def marketplace_list() -> list[dict]:
-    """List registered marketplaces."""
+    """List registered skill marketplaces.
+
+    Marketplaces are git repos containing skill directories (each with a
+    SKILL.md file). Use list_skills() or get_skill() to see which skills
+    each marketplace provides — those results include ``source`` (the
+    marketplace alias) and ``source_path`` (the skill's directory path
+    within the repo).
+
+    To publish a new or updated skill to a marketplace, clone the repo at
+    ``url``, add or update the skill folder at the path shown by
+    ``source_path`` from list_skills()/get_skill(), commit, and push.
+
+    Returns:
+        List of dicts, each with:
+          - alias: Marketplace identifier (e.g. 'krisrowe/skills').
+          - url: Git clone URL for the marketplace repo.
+    """
     return [{"alias": mp["alias"], "url": mp["url"]} for mp in _list_registered_marketplaces()]
 
 
@@ -255,7 +271,24 @@ def list_skills(
     target: Optional[str] = None,
     installed: Optional[bool] = None,
 ) -> list[dict]:
-    """List skills from all sources (marketplaces + locally installed)."""
+    """List skills from all registered marketplaces and locally installed.
+
+    Each result includes:
+      - name: Skill name.
+      - description: Short description from SKILL.md frontmatter.
+      - effective_targets: Platforms this skill supports (e.g. ['claude', 'gemini']).
+      - installed: Dict of {platform: bool} showing install status per platform.
+      - source: Marketplace alias the skill was found in, or '-' if only
+                found locally (not from any marketplace).
+      - source_path: Absolute path to the skill directory within the
+                     marketplace repo. Use with marketplace_list() url
+                     to locate the skill in its source repo for updates.
+
+    Args:
+        target: Filter by platform ('claude' or 'gemini').
+        installed: If True, only installed skills. If False, only
+                   not-installed. If None (default), all.
+    """
     seen_names = set()
     results = []
 

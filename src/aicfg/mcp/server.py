@@ -140,13 +140,50 @@ async def check_mcp_server_startup(command: str, args: Optional[list[str]] = Non
         return {"error": str(e)}
 
 @mcp.tool()
+async def skills_marketplaces_list() -> dict[str, Any]:
+    """List registered skill marketplaces.
+
+    Marketplaces are git repos containing skill directories (each with a
+    SKILL.md file). Each entry returns an alias and the git URL for the
+    repo.
+
+    To discover which skills a marketplace provides, use list_skills() —
+    each skill result includes a ``source`` field (marketplace alias) and
+    ``source_path`` (the skill's directory within the repo).
+
+    To publish a new or updated skill, clone the repo at the returned
+    ``url``, add or update the skill folder at the path shown by
+    ``source_path`` from list_skills()/get_skill(), commit, and push.
+
+    Returns:
+        marketplaces: List of {alias, url} entries.
+    """
+    try:
+        results = skills_sdk.marketplace_list()
+        return {"marketplaces": results}
+    except Exception as e:
+        logger.error(f"Error listing marketplaces: {e}")
+        return {"error": str(e)}
+
+@mcp.tool()
 async def list_skills(
     target: Optional[str] = None,
 ) -> dict[str, Any]:
-    """List available cross-tool skills with optional filtering.
+    """List skills from all registered marketplaces and locally installed.
+
+    Each skill result includes:
+      - name: Skill name.
+      - description: Short description from SKILL.md frontmatter.
+      - effective_targets: Platforms this skill supports (['claude', 'gemini']).
+      - installed: {platform: bool} showing install status per platform.
+      - source: Marketplace alias the skill was found in, or '-' if only
+                found locally (not from any marketplace).
+      - source_path: Path to the skill directory within the marketplace
+                     repo. Use with skills_marketplaces_list() url to
+                     locate the skill in its source repo for updates.
 
     Args:
-        target: Filter by platform ('claude' or 'gemini')
+        target: Filter by platform ('claude' or 'gemini').
     """
     try:
         results = skills_sdk.list_skills(target=target)

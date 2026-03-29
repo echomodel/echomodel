@@ -39,7 +39,15 @@ def marketplace_register(alias, url):
 
 @marketplace.command(name="list")
 def marketplace_list():
-    """List registered marketplaces."""
+    """List registered skill marketplaces (alias and git URL).
+
+    Use 'aicfg skills list' to see which skills each marketplace provides.
+    Each skill shows its source marketplace and source_path within the repo.
+
+    To publish a skill, clone the repo at the URL shown here, add or update
+    the skill folder at the source_path from 'aicfg skills list' or
+    'aicfg skills show <name>', commit, and push.
+    """
     results = sdk.marketplace_list()
     if not results:
         click.echo("No marketplaces registered.")
@@ -66,7 +74,13 @@ def marketplace_remove(alias):
 @click.option("--not-installed", is_flag=True, default=None, help="Show only not-installed skills")
 @click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text", help="Output format")
 def list_skills(target, installed, not_installed, fmt):
-    """List available skills."""
+    """List skills from all registered marketplaces and locally installed.
+
+    Each skill shows its name, description, install status per platform,
+    source marketplace, and source_path within the marketplace repo. Use
+    'aicfg skills marketplace list' to get the git URL for a marketplace,
+    then source_path to locate the skill folder for publishing updates.
+    """
     if installed and not_installed:
         click.echo("Cannot specify both --installed and --not-installed", err=True)
         sys.exit(1)
