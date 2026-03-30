@@ -1,13 +1,27 @@
 # aicfg
 
-Manage AI agent skills, MCP servers, and configuration across Claude Code and Gemini CLI from a single tool.
+Know at a glance which AI agent skills are installed on this machine,
+for which platform, and which are missing — then fix it with one command.
+
+aicfg is a unified tool for managing skills, MCP servers, and
+configuration across Claude Code and Gemini CLI. Register git-hosted
+skill marketplaces, browse what's available, and install to both
+platforms without learning each tool's syntax.
 
 ## Why
 
-Claude Code and Gemini CLI each have their own skill format, config files, and MCP server registrations. If you use both, you're maintaining everything in two places. aicfg bridges the gap:
+The core problem: you track a set of skills you care about across one
+or more marketplaces. On any given machine, some are installed for
+Claude, some for Gemini, some for both, some for neither. Without
+aicfg, answering "what's missing?" means checking two separate
+directories and comparing manually.
 
-- **One command to install a skill to both platforms** — no need to learn each tool's install syntax
+`aicfg skills list` answers that question instantly — one table showing
+every skill from your registered marketplaces, with install status per
+platform. That's the central value. Everything else follows from it:
+
 - **Git-hosted skill marketplaces** — register a repo, browse skills, install by name
+- **One command to install a skill to both platforms** — no need to learn each tool's install syntax
 - **Unified MCP server management** — register, health-check, and list servers across scopes
 - **Context file unification** — keep CLAUDE.md and .gemini/settings.json in sync from shared source files
 
