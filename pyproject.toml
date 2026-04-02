@@ -21,8 +21,7 @@ dev = ["pytest"]
 [project.scripts]
 em = "aicfg.cli:cli"
 echomodel = "aicfg.cli:cli"
-aicfg = "aicfg.cli:cli"
-aicfg-mcp = "aicfg.mcp.server:run_server"
+echomodel-mcp = "aicfg.mcp.server:run_server"
 
 [tool.setuptools.packages.find]
 where = ["src"]
