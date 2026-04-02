@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aicfg"
-version = "0.2.0"
-description = "AI Config Manager — cross-tool skill marketplace and configuration for Claude Code and Gemini CLI"
+name = "echomodel"
+version = "0.2.1"
+description = "AI agent ecosystem — cross-platform skill management, MCP tools, and configuration"
 requires-python = ">=3.11"
 dependencies = [
     "click",
@@ -19,6 +19,8 @@ dependencies = [
 dev = ["pytest"]
 
 [project.scripts]
+em = "aicfg.cli:cli"
+echomodel = "aicfg.cli:cli"
 aicfg = "aicfg.cli:cli"
 aicfg-mcp = "aicfg.mcp.server:run_server"
 
